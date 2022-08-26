@@ -23,7 +23,7 @@ export class Blob {
     this.header = header;
     this.body = body;
   }
-  get block(): HeaderBlock | PrimitiveBlock {
+  decodeBlock(): HeaderBlock | PrimitiveBlock {
     let data = this.body.data?.value;
     if (!data) throw new Error("No data");
     // uncompress
