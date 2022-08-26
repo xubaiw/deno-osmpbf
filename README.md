@@ -1,13 +1,13 @@
 # deno-osmpbf
 
-OpenStreetMap PBF parser in deno.
+OpenStreetMap PBF parser in deno, backed with [`pbkit`](https://github.com/pbkit/pbkit).
 
 ## Example 
 
 Count elements in Planet PBF file.
 
 ```js
-import { Reader } from "https://deno.land/x/osmpbf@v0.1.0/mod.ts";
+import { Reader } from "https://deno.land/x/osmpbf@v0.1.2/mod.ts";
 
 const reader = await Reader.fromPath("planet-latest.osm.pbf");
 
