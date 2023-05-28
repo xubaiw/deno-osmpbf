@@ -8,89 +8,86 @@ import {
 } from "./generated/messages/(OSMPBF)/Blob.ts";
 import {
   decodeBinary as decodeHeaderBlock,
-  Type as HeaderBlock
+  Type as HeaderBlock,
 } from "./generated/messages/(OSMPBF)/HeaderBlock.ts";
 import {
   decodeBinary as decodePrimitiveBlock,
-  Type as PrimitiveBlock
-} from "./generated/messages/(OSMPBF)/PrimitiveBlock.ts"
-import { unzlib } from "https://deno.land/x/denoflate@1.2.1/mod.ts";
+  Type as PrimitiveBlock,
+} from "./generated/messages/(OSMPBF)/PrimitiveBlock.ts";
+import { Foras, unzlib } from "https://deno.land/x/foras@2.0.8/src/deno/mod.ts";
 
-export class Blob {
-  header: BlobHeader;
-  body: BlobBody;
-  constructor(header: BlobHeader, body: BlobBody) {
-    this.header = header;
-    this.body = body;
-  }
-  decodeBlock(): HeaderBlock | PrimitiveBlock {
-    let data = this.body.data?.value;
-    if (!data) throw new Error("No data");
-    // uncompress
-    switch (this.body.data?.field) {
-      case "raw":
-        break;
-      case "zlibData":
-        data = unzlib(data);
-        break;
-      default:
-        throw new Error(`Unimplemented compress type \`${this.body.data?.field}\``);
-    }
-    switch (this.header.type) {
-      case "OSMHeader":
-        return decodeHeaderBlock(data);
-      case "OSMData":
-        return decodePrimitiveBlock(data);
-      default:
-        throw new Error(`Unexpected blob type \`${this.header.type}\``);
-    }
-  }
+await Foras.initBundledOnce();
+
+const SIZE_BUF = new Uint8Array(4);
+
+export async function read(path: string): Promise<Reader> {
+  const file = await Deno.open(path);
+  return {
+    file,
+    blobs: {
+      async *[Symbol.asyncIterator]() {
+        while (true) {
+          const blob = await readBlob(file);
+          if (!blob) break;
+          yield blob;
+        }
+      },
+    },
+  };
 }
 
-export class Reader {
+type Reader = {
   file: Deno.FsFile;
-  private constructor(file: Deno.FsFile) {
-    this.file = file;
-  }
-  static async fromPath(path: string | URL) {
-    const file = await Deno.open(path);
-    return new Reader(file);
-  }
-  async *[Symbol.asyncIterator]() {
-    while (true) {
-      const blob = await this.readBlob();
-      if (!blob) break;
-      yield blob;      
-    }
-  }
-  private async readBytes(size: number): Promise<Uint8Array | null> {
-    const array8 = new Uint8Array(size);
-    const n = await this.file.read(array8);
-    if (!n) return null;
-    return array8;
-  }
-  private async readHeaderSize(): Promise<number | null> {
-    const array8 = await this.readBytes(4);
-    if (!array8) return null;
-    const view = new DataView(array8.buffer);
-    const size = view.getUint32(0, false);
-    return size;
-  }
-  private async readHeader(): Promise<BlobHeader | null> {
-    const size = await this.readHeaderSize();
-    if (!size) return null;
-    const array8 = await this.readBytes(size);
-    if (!array8) return null;
-    const header = decodeBlobHeader(array8);
-    return header;
-  }
-  private async readBlob(): Promise<Blob | null> {
-    const header = await this.readHeader();
-    if (!header) return null;
-    const array8 = await this.readBytes(header.datasize);
-    if (!array8) return null;
-    const body = decodeBlobBody(array8);
-    return new Blob(header, body);
-  }
+  blobs: AsyncIterable<Blob>;
+};
+
+async function readBlobHeaderSize(f: Deno.FsFile) {
+  const n = await f.read(SIZE_BUF);
+  if (!n) return null;
+  const view = new DataView(SIZE_BUF.buffer);
+  const size = view.getInt32(0, false);
+  return size;
 }
 
+async function readBlobHeader(f: Deno.FsFile) {
+  const size = await readBlobHeaderSize(f);
+  if (!size) return null;
+  const buf = new Uint8Array(size);
+  await f.read(buf);
+  const header = decodeBlobHeader(buf);
+  return header;
+}
+
+async function readBlob(f: Deno.FsFile): Promise<Blob | null> {
+  const header = await readBlobHeader(f);
+  if (!header) return null;
+  const buf = new Uint8Array(header.datasize);
+  await f.read(buf);
+  const body = decodeBlobBody(buf);
+  return { header, body };
+}
+
+type Blob = { header: BlobHeader; body: BlobBody };
+
+export function decodeBlob(blob: Blob): HeaderBlock | PrimitiveBlock | null {
+  let data = blob.body.data?.value;
+  if (!data) throw new Error("No data");
+  // uncompress
+  switch (blob.body.data?.field) {
+    case "raw":
+      break;
+    case "zlibData":
+      data = unzlib(data);
+      break;
+    default:
+      return null;
+  }
+  switch (blob.header.type) {
+    case "OSMHeader":
+      return decodeHeaderBlock(data);
+    case "OSMData":
+      return decodePrimitiveBlock(data);
+    default:
+      return null;
+  }
+}
