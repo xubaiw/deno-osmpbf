@@ -1,35 +1,89 @@
 import {
   decodeBinary as decodeBlobHeader,
-  Type as BlobHeader,
 } from "./generated/messages/(OSMPBF)/BlobHeader.ts";
 import {
   decodeBinary as decodeBlobBody,
-  Type as BlobBody,
 } from "./generated/messages/(OSMPBF)/Blob.ts";
-import {
-  decodeBinary as decodeHeaderBlock,
-  Type as HeaderBlock,
-} from "./generated/messages/(OSMPBF)/HeaderBlock.ts";
-import {
-  decodeBinary as decodePrimitiveBlock,
-  Type as PrimitiveBlock,
-} from "./generated/messages/(OSMPBF)/PrimitiveBlock.ts";
-import { Foras, unzlib } from "https://deno.land/x/foras@2.0.8/src/deno/mod.ts";
+import { AsyncQueue } from "https://deno.land/x/for_awaitable_queue@1.0.0/mod.ts";
+import { OsmBlob, OsmBlock, Res } from "./types.ts";
 
-await Foras.initBundledOnce();
-
+/** The buffer to reuse for reading blob header size (4 byte). */
 const SIZE_BUF = new Uint8Array(4);
 
+/** The entry function of this module. */
 export async function read(path: string): Promise<Reader> {
   const file = await Deno.open(path);
+  const blobs = {
+    async *[Symbol.asyncIterator]() {
+      while (true) {
+        const blob = await readBlob(file);
+        if (!blob) break;
+        yield blob;
+      }
+    },
+  };
   return {
     file,
-    blobs: {
+    blobs,
+    blocks: {
       async *[Symbol.asyncIterator]() {
-        while (true) {
-          const blob = await readBlob(file);
-          if (!blob) break;
-          yield blob;
+        // init queues
+        const qBlob = new AsyncQueue<OsmBlob>();
+        const qBlock = new AsyncQueue<OsmBlock | null>();
+        const qWorker = new AsyncQueue<Worker>();
+        // init web workers
+        for (let i = 0; i < navigator.hardwareConcurrency - 1; i++) {
+          const worker = new Worker(import.meta.resolve("./worker.ts"), {
+            type: "module",
+          });
+          worker.onmessage = (e: MessageEvent<Res>) => {
+            switch (e.data.type) {
+              case "close":
+                // end of block
+                qBlock.close();
+                break;
+              case "block":
+                qBlock.push(e.data.block);
+            }
+            // requeue self
+            qWorker.push(worker);
+          };
+          // initial queue
+          qWorker.push(worker);
+        }
+        const push = async () => {
+          for await (const blob of blobs) {
+            qBlob.push(blob);
+          }
+          // on push end, close blob
+          qBlob.close();
+        };
+        push();
+        const schedule = async () => {
+          w:
+          for await (const worker of qWorker) {
+            for await (const blob of qBlob) {
+              // transfer for better performance
+              const transfer: Transferable[] = [];
+              if (blob.header.indexdata) {
+                transfer.push(blob.header.indexdata.buffer);
+              }
+              if (blob.body.data?.value) {
+                transfer.push(blob.body.data.value.buffer);
+              }
+              worker.postMessage({ type: "blob", blob }, transfer);
+              // wait for new worker
+              continue w;
+            }
+            // no more blob, terminate workers
+            worker.terminate();
+          }
+        };
+        schedule();
+        // handle block
+        for await (const block of qBlock) {
+          if (!block) continue;
+          if ("primitivegroup" in block) yield block;
         }
       },
     },
@@ -38,9 +92,11 @@ export async function read(path: string): Promise<Reader> {
 
 type Reader = {
   file: Deno.FsFile;
-  blobs: AsyncIterable<Blob>;
+  blobs: AsyncIterable<OsmBlob>;
+  blocks: AsyncIterable<OsmBlock>;
 };
 
+/** Utility function for reading blob header size. */
 async function readBlobHeaderSize(f: Deno.FsFile) {
   const n = await f.read(SIZE_BUF);
   if (!n) return null;
@@ -49,6 +105,7 @@ async function readBlobHeaderSize(f: Deno.FsFile) {
   return size;
 }
 
+/** Utility function for reading blob header. */
 async function readBlobHeader(f: Deno.FsFile) {
   const size = await readBlobHeaderSize(f);
   if (!size) return null;
@@ -58,36 +115,12 @@ async function readBlobHeader(f: Deno.FsFile) {
   return header;
 }
 
-async function readBlob(f: Deno.FsFile): Promise<Blob | null> {
+/** Utility function for reading blob header and body. */
+async function readBlob(f: Deno.FsFile): Promise<OsmBlob | null> {
   const header = await readBlobHeader(f);
   if (!header) return null;
   const buf = new Uint8Array(header.datasize);
   await f.read(buf);
   const body = decodeBlobBody(buf);
   return { header, body };
-}
-
-type Blob = { header: BlobHeader; body: BlobBody };
-
-export function decodeBlob(blob: Blob): HeaderBlock | PrimitiveBlock | null {
-  let data = blob.body.data?.value;
-  if (!data) throw new Error("No data");
-  // uncompress
-  switch (blob.body.data?.field) {
-    case "raw":
-      break;
-    case "zlibData":
-      data = unzlib(data);
-      break;
-    default:
-      return null;
-  }
-  switch (blob.header.type) {
-    case "OSMHeader":
-      return decodeHeaderBlock(data);
-    case "OSMData":
-      return decodePrimitiveBlock(data);
-    default:
-      return null;
-  }
 }
