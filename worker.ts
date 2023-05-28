@@ -21,7 +21,13 @@ self.onmessage = (e: MessageEvent<Req>) => {
       break;
     case "blob": {
       const block = decodeBlob(data.blob);
-      self.postMessage({ type: "block", block });
+      // HACK: as forEach > push do not work, only take the first one
+      const transfer: Transferable[] = [];
+      if (block && "stringtable" in block && block.stringtable) {
+        const buf = block.stringtable.s.at(0)?.buffer;
+        if (buf) transfer.push(buf);
+      }
+      self.postMessage({ type: "block", block }, transfer);
     }
   }
 };
