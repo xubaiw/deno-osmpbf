@@ -1,35 +1,18 @@
 /// <reference lib="webworker" />
 
-import { Foras, unzlib } from "https://deno.land/x/foras@2.0.8/src/deno/mod.ts";
 import {
   decodeBinary as decodeHeaderBlock,
 } from "./generated/messages/(OSMPBF)/HeaderBlock.ts";
 import {
   decodeBinary as decodePrimitiveBlock,
 } from "./generated/messages/(OSMPBF)/PrimitiveBlock.ts";
-import { OsmBlob, OsmBlock, Req } from "./types.ts";
-
-// init foras wasm
-await Foras.initBundledOnce();
+import { OsmBlob, OsmBlock, mkBlobTransfer } from "./shared.ts";
+import { unzlib } from "./unzlib.ts"
 
 // handle postMessage
-self.onmessage = (e: MessageEvent<Req>) => {
-  const data = e.data;
-  switch (data.type) {
-    case "close":
-      self.postMessage({ type: "close" });
-      break;
-    case "blob": {
-      const block = decodeBlob(data.blob);
-      // HACK: as forEach > push do not work, only take the first one
-      const transfer: Transferable[] = [];
-      if (block && "stringtable" in block && block.stringtable) {
-        const buf = block.stringtable.s.at(0)?.buffer;
-        if (buf) transfer.push(buf);
-      }
-      self.postMessage({ type: "block", block }, transfer);
-    }
-  }
+self.onmessage = (e: MessageEvent<OsmBlob>) => {
+  const block = decodeBlob(e.data);
+  self.postMessage(block, mkBlobTransfer(e.data));
 };
 
 /** Decode blob buffer into block structure. */

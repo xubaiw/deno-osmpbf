@@ -9,17 +9,22 @@ import {
 } from "./generated/messages/(OSMPBF)/BlobHeader.ts";
 import { Type as OsmBlobBody } from "./generated/messages/(OSMPBF)/Blob.ts";
 
-export type Req =
-  | { type: "close" }
-  | { type: "blob"; blob: OsmBlob }
-
-export type Res =
-  | { type: "close" }
-  | { type: "block"; block: OsmBlock };
-
 export type OsmBlob = {
   header: OsmBlobHeader;
   body: OsmBlobBody;
 };
 
 export type OsmBlock = OsmPrimitiveBlock | OsmHeaderBlock;
+
+/**
+ * HACK: deno's SharedArrayBuffer support is incomplete
+ * <https://github.com/denoland/deno/issues/14988> and
+ * <https://github.com/denoland/deno/issues/12678>
+ */
+export function mkBlobTransfer(blob: OsmBlob): Transferable[] {
+  const buf = blob.body.data?.value.buffer;
+  if (buf && buf.byteLength > 0) {
+    return [buf];
+  }
+  return [];
+}
