@@ -1,5 +1,7 @@
 # deno-osmpbf
 
+**NOTE: This repo is no longer maintained, as Deno is not a suitable environment for processing large data (prone to run out of memory). For OSM related tasks, Rust may be a better [choice](https://github.com/b-r-u/osmpbf).**
+
 OpenStreetMap PBF parser in deno, backed with [`pbkit`](https://github.com/pbkit/pbkit).
 
 ## Example 
